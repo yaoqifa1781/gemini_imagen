@@ -54,6 +54,57 @@
             border-color: var(--accent-color);
         }
         
+        /* --- 新增样式：图生图上传预览 --- */
+        .file-upload-wrapper {
+            position: relative;
+            border: 2px dashed #4a5568;
+            border-radius: 6px;
+            padding: 20px;
+            text-align: center;
+            cursor: pointer;
+            transition: border-color 0.3s;
+        }
+        .file-upload-wrapper:hover {
+            border-color: var(--accent-color);
+        }
+        #init_image_input {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            opacity: 0;
+            cursor: pointer;
+        }
+        .upload-placeholder { color: #a0aec0; pointer-events: none; }
+        
+        .preview-container {
+            display: none;
+            margin-top: 10px;
+            position: relative;
+            width: fit-content;
+        }
+        #preview-img {
+            max-width: 100%;
+            max-height: 200px;
+            border-radius: 6px;
+            border: 1px solid #4a5568;
+        }
+        .clear-preview-btn {
+            position: absolute;
+            top: -10px;
+            right: -10px;
+            background: var(--danger-color);
+            color: white;
+            border: none;
+            border-radius: 50%;
+            width: 24px;
+            height: 24px;
+            cursor: pointer;
+            font-weight: bold;
+            line-height: 24px;
+            text-align: center;
+            padding: 0;
+        }
+        /* --------------------------------- */
+
         button {
             width: 100%;
             padding: 12px;
@@ -215,6 +266,17 @@
             <textarea id="prompt" rows="4" placeholder="描述你想要的画面..."></textarea>
         </div>
         
+        <div class="form-group">
+            <label>参考图 (图生图，可选)</label>
+            <div class="file-upload-wrapper" id="upload-box">
+                <span class="upload-placeholder">点击或拖拽上传图片 (支持 JPG/PNG)</span>
+                <input type="file" id="init_image_input" accept="image/jpeg, image/png">
+            </div>
+            <div class="preview-container" id="preview-container">
+                <img id="preview-img" alt="Preview">
+                <button class="clear-preview-btn" onclick="clearImagePreview()">×</button>
+            </div>
+        </div>
         <div class="disclaimer-box">
             <strong>⚠️ 免责声明 (Disclaimer)</strong>
             本工具仅供个人学习与技术研究使用。严禁生成色情、暴力、政治敏感等违法内容。用户生成的任何内容纯属个人行为，法律后果由用户自行承担。
@@ -237,6 +299,42 @@
 </div>
 
 <script>
+    let initImageBase64 = null;
+
+    // 处理图片上传
+    const fileInput = document.getElementById('init_image_input');
+    const previewContainer = document.getElementById('preview-container');
+    const previewImg = document.getElementById('preview-img');
+    const uploadBox = document.getElementById('upload-box');
+
+    fileInput.addEventListener('change', function(e) {
+        const file = e.target.files[0];
+        if (file) {
+            if (file.size > 10 * 1024 * 1024) { // 稍微放宽前端限制，后端会压缩
+                alert("图片太大，请上传小于 10MB 的图片");
+                this.value = '';
+                return;
+            }
+            
+            const reader = new FileReader();
+            reader.onload = function(event) {
+                initImageBase64 = event.target.result;
+                previewImg.src = initImageBase64;
+                previewContainer.style.display = 'block';
+                uploadBox.style.display = 'none';
+            };
+            reader.readAsDataURL(file);
+        }
+    });
+
+    function clearImagePreview() {
+        fileInput.value = '';
+        initImageBase64 = null;
+        previewImg.src = '';
+        previewContainer.style.display = 'none';
+        uploadBox.style.display = 'block';
+    }
+
     function toggleSubmitButton() {
         const checkbox = document.getElementById('agree_chk');
         const btn = document.getElementById('gen-btn');
@@ -277,7 +375,8 @@
             prompt: prompt,
             ratio: document.getElementById('ratio').value,
             scale: document.getElementById('scale').value,
-            format: document.getElementById('format').value
+            format: document.getElementById('format').value,
+            init_image: initImageBase64 
         };
 
         try {
