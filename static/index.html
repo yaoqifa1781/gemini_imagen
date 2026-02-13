@@ -54,7 +54,6 @@
             border-color: var(--accent-color);
         }
         
-        /* 按钮样式 */
         button {
             width: 100%;
             padding: 12px;
@@ -72,14 +71,12 @@
             background-color: #2563eb; 
             transform: translateY(-1px);
         }
-        /* 禁用状态的按钮 */
         button:disabled { 
             background-color: #4a5568; 
             cursor: not-allowed; 
             opacity: 0.6; 
         }
         
-        /* 图片展示区 */
         .result-area {
             display: flex;
             flex-direction: column;
@@ -119,7 +116,6 @@
         }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
         
-        /* 免责声明样式 */
         .disclaimer-box {
             margin-bottom: 15px;
             padding: 12px;
@@ -130,13 +126,8 @@
             color: #cbd5e1;
             line-height: 1.5;
         }
-        .disclaimer-box strong {
-            color: var(--danger-color);
-            display: block;
-            margin-bottom: 5px;
-        }
+        .disclaimer-box strong { color: var(--danger-color); display: block; margin-bottom: 5px; }
         
-        /* 勾选框样式 */
         .checkbox-wrapper {
             display: flex;
             align-items: center;
@@ -167,9 +158,8 @@
 <body>
 
 <div class="container">
-    <!-- 左侧设置栏 -->
     <div class="card">
-        <h1>Image Generator</h1>
+        <h1>Imagen Generator</h1>
         
         <div class="form-group">
             <label>API Key</label>
@@ -189,28 +179,24 @@
         </div>
 
         <div class="form-group">
-            <label>基础比例</label>
-            <select id="ratio" onchange="toggleCustomSize()">
-                <option value="16:9 (1080p Full HD)">16:9 (1080p Full HD)</option>
-                <option value="1:1 (SDXL标准 1024)">1:1 (SDXL标准 1024)</option>
-                <option value="16:9 (SDXL标准 768p)">16:9 (SDXL标准 768p)</option>
-                <option value="9:16 (手机竖屏)">9:16 (手机竖屏)</option>
-                <option value="4:3 (标准)">4:3 (标准)</option>
-                <option value="21:9 (宽屏)">21:9 (宽屏)</option>
+            <label>画面比例</label>
+            <select id="ratio">
+                <option value="16:9 (1080p/4K)">16:9 (1080p/4K 宽屏)</option>
+                <option value="1:1 (正方形)">1:1 (正方形)</option>
+                <option value="9:16 (手机壁纸)">9:16 (手机壁纸)</option>
+                <option value="4:3 (标准照片)">4:3 (标准照片)</option>
+                <option value="3:4 (竖向照片)">3:4 (竖向照片)</option>
+                <option value="21:9 (电影感)">21:9 (电影感)</option>
+                <option value="2:3 (艺术照)">2:3 (艺术照)</option>
             </select>
         </div>
 
-        <div class="form-group" id="custom-size-group" style="display: none;">
-            <label>手动分辨率 (WxH)</label>
-            <input type="text" id="custom_size" value="1920x1080">
-        </div>
-
         <div class="form-group">
-            <label>清晰度</label>
+            <label>清晰度等级</label>
             <select id="scale">
-                <option value="1k">1k</option>
-                <option value="2k">2k</option>
-                <option value="4k">4k (配合 Pro 模型)</option>
+                <option value="1k">1k (标准)</option>
+                <option value="2k">2k (高清)</option>
+                <option value="4k">4k (超清 Pro)</option>
             </select>
         </div>
 
@@ -223,26 +209,22 @@
         </div>
     </div>
 
-    <!-- 右侧展示栏 -->
     <div class="card">
         <div class="form-group">
             <label>提示词 (Prompt)</label>
             <textarea id="prompt" rows="4" placeholder="描述你想要的画面..."></textarea>
         </div>
         
-        <!-- 1. 免责声明文本 -->
         <div class="disclaimer-box">
             <strong>⚠️ 免责声明 (Disclaimer)</strong>
             本工具仅供个人学习与技术研究使用。严禁生成色情、暴力、政治敏感等违法内容。用户生成的任何内容纯属个人行为，法律后果由用户自行承担。
         </div>
 
-        <!-- 2. 强制勾选框 -->
         <div class="checkbox-wrapper">
             <input type="checkbox" id="agree_chk" onchange="toggleSubmitButton()">
             <label for="agree_chk">我已知晓并承诺合规使用</label>
         </div>
         
-        <!-- 3. 生成按钮 (默认 disabled) -->
         <button onclick="generateImage()" id="gen-btn" disabled>🚫 请先勾选免责声明</button>
 
         <div class="result-area" id="result-area">
@@ -255,18 +237,9 @@
 </div>
 
 <script>
-    // 切换自定义尺寸框显示
-    function toggleCustomSize() {
-        const ratio = document.getElementById('ratio').value;
-        const customGroup = document.getElementById('custom-size-group');
-        customGroup.style.display = ratio === 'custom' ? 'block' : 'none';
-    }
-
-    // 切换按钮可用状态
     function toggleSubmitButton() {
         const checkbox = document.getElementById('agree_chk');
         const btn = document.getElementById('gen-btn');
-        
         if (checkbox.checked) {
             btn.disabled = false;
             btn.innerText = "🚀 开始生成";
@@ -281,7 +254,6 @@
         const prompt = document.getElementById('prompt').value;
         const checkbox = document.getElementById('agree_chk');
         
-        // 安全校验
         if (!checkbox.checked) { alert("请先勾选免责声明！"); return; }
         if (!apiKey) { alert("请输入 API Key"); return; }
         if (!prompt) { alert("请输入提示词"); return; }
@@ -292,7 +264,6 @@
         const downloadBtn = document.getElementById('download-link');
         const statusText = document.getElementById('status-text');
 
-        // UI 状态更新
         btn.disabled = true;
         btn.innerText = "生成中...";
         loader.style.display = 'block';
@@ -306,7 +277,6 @@
             prompt: prompt,
             ratio: document.getElementById('ratio').value,
             scale: document.getElementById('scale').value,
-            custom_size: document.getElementById('custom_size').value,
             format: document.getElementById('format').value
         };
 
@@ -320,16 +290,12 @@
             const data = await response.json();
 
             if (data.status === 'success') {
-                // 显示图片
                 img.src = `data:image/${payload.format === 'jpg' ? 'jpeg' : 'png'};base64,${data.image_base64}`;
                 img.style.display = 'block';
-                
-                // 设置下载链接
                 downloadBtn.href = img.src;
                 downloadBtn.download = `generated_image.${payload.format}`;
                 downloadBtn.style.display = 'inline-block';
                 downloadBtn.innerText = "下载图片";
-                
                 statusText.innerText = "";
             } else {
                 statusText.innerText = "生成失败: " + data.message;
@@ -340,7 +306,6 @@
             statusText.innerText = "网络请求失败";
             alert("网络请求失败，请检查控制台");
         } finally {
-            // 请求结束后恢复按钮状态 (如果勾选框还是选中的话)
             if (document.getElementById('agree_chk').checked) {
                 btn.disabled = false;
                 btn.innerText = "🚀 开始生成";
