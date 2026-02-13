@@ -10,6 +10,7 @@ from collections import deque
 from PIL import Image
 from io import BytesIO
 from openai import AsyncOpenAI
+from typing import Optional
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
@@ -73,7 +74,7 @@ def contains_local_sensitive_words(text: str):
     return False, None
 
 # ==========================================
-# 3. 百度审核 & 生成逻辑
+# 3. 百度审核 & 图片处理逻辑
 # ==========================================
 
 _BAIDU_TOKEN_CACHE = {"token": None, "expires_at": 0}
@@ -128,7 +129,7 @@ class GenerateRequest(BaseModel):
     ratio: str
     scale: str
     format: str 
-    # ⚠️ custom_size 已移除
+    init_image: Optional[str] = None  # 支持图生图
 
 def process_image_in_memory(image_bytes: bytes, target_format: str, target_size: tuple = None) -> str:
     try:
@@ -157,6 +158,41 @@ def process_image_in_memory(image_bytes: bytes, target_format: str, target_size:
     finally: 
         gc.collect()
 
+def sanitize_input_image(base64_str: str) -> str:
+    """
+    清洗上传的图片：
+    1. 剥离 data URI 前缀
+    2. 转为 RGB 模式（去除 Alpha 通道，解决 500 错误）
+    3. 限制最大边长 1024px（解决超时问题）
+    4. 返回纯 Base64 字符串
+    """
+    if not base64_str: return None
+    
+    if "base64," in base64_str:
+        base64_data = base64_str.split("base64,")[1]
+    else:
+        base64_data = base64_str
+
+    try:
+        img_data = base64.b64decode(base64_data)
+        with Image.open(BytesIO(img_data)) as img:
+            # 强制转为 RGB，防止 PNG 透明通道导致 API 报错
+            if img.mode != "RGB":
+                img = img.convert("RGB")
+            
+            # 缩放过大的图片，加速上传和处理
+            max_size = 1024
+            if max(img.size) > max_size:
+                img.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
+                print(f"📉 [Input] 参考图已压缩至: {img.size}")
+
+            out = BytesIO()
+            img.save(out, format="JPEG", quality=85)
+            return base64.b64encode(out.getvalue()).decode('utf-8')
+    except Exception as e:
+        print(f"⚠️ 图片预处理失败，将尝试使用原始数据: {e}")
+        return base64_data
+
 async def download_image_as_bytes(url):
     print(f"📥 下载: {url}")
     async with httpx.AsyncClient(timeout=360) as client:
@@ -165,19 +201,14 @@ async def download_image_as_bytes(url):
         raise Exception(f"HTTP {r.status_code}")
 
 async def core_generate(req: GenerateRequest):
-    # 1. 纯查表逻辑 (不再处理 custom)
-    ratio_key = req.ratio.split(' ')[0] # 提取 "16:9"
-    
-    # 默认兜底
+    # 1. 纯查表逻辑：计算目标尺寸
+    ratio_key = req.ratio.split(' ')[0]
     target_w, target_h = 1024, 1024
-    
     if ratio_key in RESOLUTION_MAP:
         if req.scale in RESOLUTION_MAP[ratio_key]:
             target_w, target_h = RESOLUTION_MAP[ratio_key][req.scale]
         else:
-            # 如果 scale 不在表里，默认 1k
             target_w, target_h = RESOLUTION_MAP[ratio_key]["1k"]
-            
     api_size_str = f"{target_w}x{target_h}"
     
     # 2. Prompt 处理
@@ -186,19 +217,32 @@ async def core_generate(req: GenerateRequest):
         quality_prompt = "standard quality"
         if req.scale == "4k": quality_prompt = "Extreme High Quality, 4K Resolution"
         elif req.scale == "2k": quality_prompt = "High Quality, 2K Resolution"
-        
         suffix = f". (Settings: Aspect Ratio {ratio_key}, Quality {quality_prompt}, Target Size {api_size_str})"
         final_prompt = f"{req.prompt} {suffix}"
     
-    # 3. API 请求
+    # 3. 预处理参考图（清洗 Base64，限制尺寸并转为 RGB）
+    clean_init_image = None
+    if req.init_image:
+        print("🧹 正在预处理参考图...")
+        clean_init_image = sanitize_input_image(req.init_image)
+
+    # 4. 初始化 OpenAI 客户端
     client = AsyncOpenAI(api_key=req.api_key, base_url=f"{app_base_url}/v1", max_retries=0, timeout=360.0)
     img_b = None
 
+    # --- 分支 A: Gemini 模型 (使用 Chat Completion 多模态) ---
     if "gemini" in req.model.lower():
         print(f"🟣 Gemini: {req.model}")
+        content_parts = [{"type": "text", "text": final_prompt}]
+        if clean_init_image:
+            content_parts.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:image/jpeg;base64,{clean_init_image}"}
+            })
+        
         res = await client.chat.completions.create(
             model=req.model, 
-            messages=[{"role":"user","content":final_prompt}], 
+            messages=[{"role":"user","content": content_parts}], 
             extra_body={"modalities":["image","text"]},
             timeout=360.0
         )
@@ -206,17 +250,62 @@ async def core_generate(req: GenerateRequest):
         u = re.search(r"!\[.*?\]\((https?://[^\)]+)\)", c) or re.search(r"(https?://\S+\.(?:png|jpg|jpeg|webp))", c)
         if u: img_b = await download_image_as_bytes(u.group(1))
         elif "base64," in c: img_b = base64.b64decode(c.split("base64,")[1].split(")")[0].strip())
-        else: raise Exception("No Image Found")
+        else: raise Exception("Gemini 返回中未找到图片数据")
+
+    # --- 分支 B: 非 Gemini 模型 (Nano Banana 等) ---
     else:
-        print(f"🔵 Standard: {req.model} | 请求 {api_size_str}")
-        res = await client.images.generate(
-            model=req.model, prompt=final_prompt, n=1, size=api_size_str, response_format="b64_json"
-        )
+        # B1: 如果有参考图，采用 edit 接口进行图生图
+        if clean_init_image:
+            print(f"🔵 [Edit 接口] 图生图模式: {req.model}")
+            
+            # 将清洗后的 Base64 转回二进制流
+            image_data = base64.b64decode(clean_init_image)
+            image_file = BytesIO(image_data)
+            image_file.name = "init_image.jpg"  # 必须提供文件名，部分 SDK 内部校验需要
+
+            try:
+                # 调用 edit 接口
+                res = await client.images.edit(
+                    model=req.model,
+                    image=image_file,
+                    prompt=final_prompt,
+                    n=1,
+                    size=api_size_str,
+                    response_format="b64_json",
+                    extra_body={"strength": 0.75} # 图生图通常需要重绘强度参数
+                )
+            except Exception as e:
+                # 如果 edit 接口报 404 或不支持，尝试回退到普通的 generate 强行传递
+                print(f"⚠️ Edit 接口调用失败 ({e})，尝试使用 Generations 兼容模式...")
+                res = await client.images.generate(
+                    model=req.model,
+                    prompt=final_prompt,
+                    size=api_size_str,
+                    response_format="b64_json",
+                    extra_body={"image": clean_init_image, "strength": 0.75}
+                )
+
+        # B2: 如果没有参考图，采用普通的 generate 接口进行文生图
+        else:
+            print(f"🔵 [Generate 接口] 文生图模式: {req.model}")
+            res = await client.images.generate(
+                model=req.model,
+                prompt=final_prompt,
+                n=1,
+                size=api_size_str,
+                response_format="b64_json"
+            )
+
+        # 处理返回的 Image 对象
         d = res.data[0]
-        if getattr(d,'b64_json',None): img_b = base64.b64decode(d.b64_json)
-        elif hasattr(d,'url'): img_b = await download_image_as_bytes(d.url)
-        else: raise Exception("No Data")
-        
+        if getattr(d, 'b64_json', None):
+            img_b = base64.b64decode(d.b64_json)
+        elif hasattr(d, 'url') and d.url:
+            img_b = await download_image_as_bytes(d.url)
+        else:
+            raise Exception("API 未返回有效的图片数据")
+
+    # 5. 最后进行图片后处理（缩放、格式转换等）
     return process_image_in_memory(img_b, req.format, target_size=(target_w, target_h))
 
 # ==========================================
@@ -236,18 +325,18 @@ async def generate_api(req: GenerateRequest, request: Request):
     ip = get_real_ip(request)
     
     # --- 🔒 API Key 脱敏处理 ---
-    # 如果 Key 长度不足 8 位，显示全部；否则只显示后 8 位，前面用 * 代替
     key_suffix = req.api_key[-8:] if len(req.api_key) >= 8 else req.api_key
     masked_key = f"******{key_suffix}"
     
     # --- 📝 增强日志记录 ---
     timestamp = datetime.now().strftime('%H:%M:%S')
+    mode = "Img2Img" if req.init_image else "Txt2Img"
     print("\n" + "="*60)
     print(f"🚀 [Req] {timestamp} | IP: {ip}")
-    print(f"🔑 Key: {masked_key}")  # 显示后8位
-    print(f"📌 Model: {req.model} | Scale: {req.scale} | Ratio: {req.ratio}")
+    print(f"🔑 Key: {masked_key}")
+    print(f"📌 Model: {req.model} | Mode: {mode} | Scale: {req.scale} | Ratio: {req.ratio}")
     print("-" * 60)
-    print(f"💡 Prompt (Full):")  # 记录完整提示词
+    print(f"💡 Prompt (Full):")
     print(req.prompt)
     print("="*60 + "\n")
 
@@ -276,6 +365,8 @@ async def generate_api(req: GenerateRequest, request: Request):
             print(f"✅ [Success] 耗时: {time.time()-start_time:.2f}s")
             return {"status": "success", "image_base64": b64}
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             print(f"❌ [Error] {e}")
             return JSONResponse({"status": "error", "message": str(e)}, 200)
         finally:
